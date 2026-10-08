@@ -6,6 +6,9 @@ import java.util.List;
 import com.invensense.inventory.dto.AdjustRequest;
 import com.invensense.inventory.dto.AsOfDto;
 import com.invensense.inventory.dto.ReceiveRequest;
+import com.invensense.inventory.dto.ReleaseRequest;
+import com.invensense.inventory.dto.ReserveRequest;
+import com.invensense.inventory.dto.ShipRequest;
 import com.invensense.inventory.dto.StockEventDto;
 import com.invensense.inventory.dto.StockLevelDto;
 import com.invensense.inventory.service.InventoryService;
@@ -58,5 +61,20 @@ public class InventoryController {
     @PostMapping("/adjust")
     public ResponseEntity<StockLevelDto> adjust(@Valid @RequestBody AdjustRequest req) {
         return ResponseEntity.ok(inventoryService.adjust(req));
+    }
+
+    @PostMapping("/reserve")
+    public ResponseEntity<StockLevelDto> reserve(@Valid @RequestBody ReserveRequest req) {
+        return ResponseEntity.ok(inventoryService.reserve(req));
+    }
+
+    @PostMapping("/release")
+    public ResponseEntity<StockLevelDto> release(@Valid @RequestBody ReleaseRequest req) {
+        return ResponseEntity.ok(inventoryService.release(req));
+    }
+
+    @PostMapping("/ship")
+    public ResponseEntity<StockLevelDto> ship(@Valid @RequestBody ShipRequest req) {
+        return ResponseEntity.ok(inventoryService.ship(req));
     }
 }

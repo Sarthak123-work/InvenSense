@@ -13,6 +13,9 @@ public interface StockEventRepository extends MongoRepository<StockEvent, String
 
     List<StockEvent> findByWarehouseIdAndSkuOrderByTimestampDesc(String warehouseId, String sku);
 
+    Optional<StockEvent> findByWarehouseIdAndTypeAndReferenceId(
+            String warehouseId, String type, String referenceId);
+
     default List<StockEvent> findByWarehouseIdAndSkuAndTimestampBeforeOrderByTimestampAsc(
             String warehouseId, String sku, Instant asOf) {
         return findAll().stream()
@@ -21,13 +24,5 @@ public interface StockEventRepository extends MongoRepository<StockEvent, String
                         && !e.getTimestamp().isAfter(asOf))
                 .sorted((a, b) -> a.getTimestamp().compareTo(b.getTimestamp()))
                 .toList();
-    }
-
-    default Optional<StockEvent> findIdempotent(String warehouseId, String type, String referenceId) {
-        return findAll().stream()
-                .filter(e -> e.getWarehouseId().equals(warehouseId)
-                        && e.getType().equals(type)
-                        && referenceId.equals(e.getReferenceId()))
-                .findFirst();
     }
 }

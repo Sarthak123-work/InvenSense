@@ -18,6 +18,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Document(collection = "stock_events")
 @CompoundIndex(name = "idx_wh_sku_ts", def = "{'warehouseId': 1, 'sku': 1, 'timestamp': 1}")
+@CompoundIndex(name = "idx_wh_type_ref", def = "{'warehouseId': 1, 'type': 1, 'referenceId': 1}", unique = true)
 public class StockEvent {
 
     @Id

@@ -3,16 +3,20 @@ package com.invensense.inventory;
 import java.time.Instant;
 import java.util.List;
 
+import com.invensense.inventory.config.InventoryProperties;
 import com.invensense.inventory.document.StockEvent;
 import com.invensense.inventory.document.StockLevel;
 import com.invensense.inventory.dto.AsOfDto;
 import com.invensense.inventory.dto.ReceiveRequest;
 import com.invensense.inventory.dto.AdjustRequest;
+import com.invensense.inventory.dto.ReserveRequest;
+import com.invensense.inventory.dto.ShipRequest;
 import com.invensense.inventory.dto.StockLevelDto;
 import com.invensense.inventory.repository.StockEventRepository;
 import com.invensense.inventory.repository.StockLevelRepository;
 import com.invensense.inventory.service.InventoryService;
 import org.junit.jupiter.api.AfterEach;
+import org.redisson.api.RedissonClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -31,14 +36,31 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
 @DataMongoTest
-@Import(InventoryService.class)
+@Import({InventoryService.class, InventoryProperties.class, InventoryServiceTest.TestConfig.class})
 class InventoryServiceTest {
 
     @TestConfiguration
     static class TestConfig {
+
         @Bean
         MongoTemplate mongoTemplate(MongoDBContainer container) {
             return new MongoTemplate(container.getReplicaSetUrl());
+        }
+
+        @Bean
+        RedissonClient redissonClient(GenericContainer<?> redis) {
+            org.redisson.config.Config config = new org.redisson.config.Config();
+            config.useSingleServer()
+                    .setAddress("redis://" + redis.getHost() + ":" + redis.getMappedPort(6379))
+                    .setConnectionPoolSize(32)
+                    .setConnectionMinimumIdleSize(8);
+            return Redisson.create(config);
+        }
+
+        @Bean
+        GenericContainer<?> redis() {
+            return new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+                    .withExposedPorts(6379);
         }
     }
 
@@ -229,21 +251,18 @@ class InventoryServiceTest {
 
         inventoryService.appendEvent("wh-pun", "SKU-1001", "STOCK_SHIPPED", 30, "ORD-001", null, "ship");
 
-        // As of after STOCK_RECEIVED only: onHand=100, reserved=0
         AsOfDto asOf1 = inventoryService.getAsOf("wh-pun", "SKU-1001", afterFirst);
         assertEquals(100, asOf1.getOnHand());
         assertEquals(0, asOf1.getReserved());
         assertEquals(100, asOf1.getAvailable());
         assertEquals(1, asOf1.getEventCount());
 
-        // As of after STOCK_RESERVED: onHand=100, reserved=30
         AsOfDto asOf2 = inventoryService.getAsOf("wh-pun", "SKU-1001", afterSecond);
         assertEquals(100, asOf2.getOnHand());
         assertEquals(30, asOf2.getReserved());
         assertEquals(70, asOf2.getAvailable());
         assertEquals(2, asOf2.getEventCount());
 
-        // As of after all events: onHand=70, reserved=0
         AsOfDto asOf3 = inventoryService.getAsOf("wh-pun", "SKU-1001", Instant.now());
         assertEquals(70, asOf3.getOnHand());
         assertEquals(0, asOf3.getReserved());
@@ -276,5 +295,60 @@ class InventoryServiceTest {
         inventoryService.appendEvent("wh-pun", "SKU-1001", "STOCK_SHIPPED", 10, "ORD-001", null, "ship");
         StockLevel l3 = levelRepo.findByWarehouseIdAndSku("wh-pun", "SKU-1001").orElseThrow();
         assertEquals(3, l3.getVersion());
+    }
+
+    @Test
+    @DisplayName("Idempotency: replaying same referenceId returns existing event")
+    void idempotency_sameReferenceReturnsExistingEvent() {
+        StockEvent first = inventoryService.appendEvent(
+                "wh-pun", "SKU-1001", "STOCK_RECEIVED", 50, "PO-001", null, "first");
+
+        StockEvent second = inventoryService.appendEvent(
+                "wh-pun", "SKU-1001", "STOCK_RECEIVED", 50, "PO-001", null, "replay");
+
+        assertEquals(first.getEventId(), second.getEventId(),
+                "Replay should return the same event");
+
+        List<StockEvent> events = eventRepo.findByWarehouseIdAndSkuOrderByTimestampDesc("wh-pun", "SKU-1001");
+        assertEquals(1, events.size(), "Should only have one event");
+    }
+
+    @Test
+    @DisplayName("Reserve endpoint creates STOCK_RESERVED event")
+    void reserveEndpoint_shouldCreateEvent() {
+        inventoryService.appendEvent("wh-pun", "SKU-1001", "STOCK_RECEIVED", 50, "SEED", null, "seed");
+
+        var req = ReserveRequest.builder()
+                .warehouseId("wh-pun")
+                .sku("SKU-1001")
+                .quantity(20)
+                .referenceId("ORD-001")
+                .build();
+
+        StockLevelDto result = inventoryService.reserve(req);
+
+        assertEquals(50, result.getOnHand());
+        assertEquals(20, result.getReserved());
+        assertEquals(30, result.getAvailable());
+    }
+
+    @Test
+    @DisplayName("Ship endpoint creates STOCK_SHIPPED event")
+    void shipEndpoint_shouldCreateEvent() {
+        inventoryService.appendEvent("wh-pun", "SKU-1001", "STOCK_RECEIVED", 50, "SEED", null, "seed");
+        inventoryService.appendEvent("wh-pun", "SKU-1001", "STOCK_RESERVED", 20, "ORD-001", null, "order");
+
+        var req = ShipRequest.builder()
+                .warehouseId("wh-pun")
+                .sku("SKU-1001")
+                .quantity(20)
+                .referenceId("ORD-001")
+                .build();
+
+        StockLevelDto result = inventoryService.ship(req);
+
+        assertEquals(30, result.getOnHand());
+        assertEquals(0, result.getReserved());
+        assertEquals(30, result.getAvailable());
     }
 }
