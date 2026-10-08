@@ -1,0 +1,1 @@
+The mock adapter keeps demo state in localStorage, simulates gateway latency, and exposes the same request shape used by the real API client.

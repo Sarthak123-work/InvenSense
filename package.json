@@ -1,0 +1,9 @@
+{
+  "name": "invensense",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {"dev":"vite","build":"vite build","preview":"vite preview"},
+  "dependencies": {"@vitejs/plugin-react":"latest","axios":"latest","bootstrap":"latest","bootstrap-icons":"latest","recharts":"latest","react":"latest","react-dom":"latest","react-hook-form":"latest","react-router-dom":"latest","vite":"latest"},
+  "devDependencies": {}
+}
