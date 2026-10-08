@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { appendEvent, getInventory, getMockState, nextId, parseBody, saveMockState } from './mock/store';
+import { getUsers, addUser, findUserByEmail, generateToken, sanitizeUser } from './mock/authStore';
 const wait=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
 const mutexes=new Map();
 let mockState;
@@ -7,6 +8,8 @@ async function withMutex(key,task){const previous=mutexes.get(key)||Promise.reso
 const response=(config,data,status=200)=>({data,status,statusText:status===200?'OK':'Conflict',headers:{},config});
 const fail=(config,message,status=409)=>{throw {response:{data:{message,status},status},config};};
 const mockAdapter=async(config)=>{ await wait(200+Math.round(Math.random()*300)); const state=mockState||(mockState=getMockState()); const path=config.url?.replace(/^\//,'')||''; const method=(config.method||'get').toLowerCase(); const body=parseBody(config); const parts=path.split('/');
+  if(path==='auth/register'&&method==='post'){const existing=findUserByEmail(body.email);if(existing)fail(config,'Email already registered',409);const id='usr-'+Date.now();const user={id,name:body.name,email:body.email,password:body.password,role:body.role,warehouseId:body.warehouseId||null};addUser(user);const token=generateToken(user);return response(config,{token,refreshToken:token,user:sanitizeUser(user)},201);}
+  if(path==='auth/login'&&method==='post'){const user=findUserByEmail(body.email);if(!user||user.password!==body.password)fail(config,'Invalid email or password',401);const token=generateToken(user);return response(config,{token,refreshToken:token,user:sanitizeUser(user)});}
   if(path==='warehouses'&&method==='get')return response(config,state.warehouses);
   if(path==='products'&&method==='get')return response(config,state.products);
   if(path==='products'&&method==='post'){state.products.push(body);saveMockState(state);return response(config,body,201);}
