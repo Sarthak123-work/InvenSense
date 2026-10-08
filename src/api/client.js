@@ -1,33 +1,40 @@
 import axios from 'axios';
-import { getMockState, saveMockState } from './mock/store';
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const mockAdapter = async (config) => {
-  await wait(200 + Math.round(Math.random() * 300));
-  const state = getMockState();
-  const path = config.url?.replace(/^\//, '') || '';
-  const method = (config.method || 'get').toLowerCase();
-
-  if (path === 'warehouses' && method === 'get') return { data: state.warehouses, status: 200, statusText: 'OK', headers: {}, config };
-  if (path === 'inventory' && method === 'get') return { data: state.inventory.map((item) => ({ ...item, available: item.onHand - item.reserved })), status: 200, statusText: 'OK', headers: {}, config };
-  if (path === 'orders' && method === 'get') return { data: state.orders, status: 200, statusText: 'OK', headers: {}, config };
-  if (path === 'notifications' && method === 'get') return { data: state.notifications, status: 200, statusText: 'OK', headers: {}, config };
-  if (path === 'auth/login' && method === 'post') {
-    const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
-    const users = { 'admin@invensense.com': ['Admin@123', 'Aarav Mehta', 'ADMIN'], 'manager.pune@invensense.com': ['Manager@123', 'Priya Nair', 'WAREHOUSE_MANAGER'], 'procure@invensense.com': ['Procure@123', 'Kabir Shah', 'PROCUREMENT'], 'sales@invensense.com': ['Sales@123', 'Riya Sharma', 'SALES'] };
-    const user = users[body.email];
-    if (!user || user[0] !== body.password) throw { response: { data: { message: 'Invalid email or password' }, status: 401 }, config };
-    return { data: { token: `mock-token-${Date.now()}`, refreshToken: 'mock-refresh-token', user: { id: body.email, name: user[1], email: body.email, role: user[2] } }, status: 200, statusText: 'OK', headers: {}, config };
-  }
-  saveMockState(state);
-  return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+import { appendEvent, getInventory, getMockState, nextId, parseBody, saveMockState } from './mock/store';
+const wait=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
+const response=(config,data,status=200)=>({data,status,statusText:status===200?'OK':'Conflict',headers:{},config});
+const fail=(config,message,status=409)=>{throw {response:{data:{message,status},status},config};};
+const mockAdapter=async(config)=>{ await wait(200+Math.round(Math.random()*300)); const state=getMockState(); const path=config.url?.replace(/^\//,'')||''; const method=(config.method||'get').toLowerCase(); const body=parseBody(config); const parts=path.split('/');
+  if(path==='warehouses'&&method==='get')return response(config,state.warehouses);
+  if(path==='products'&&method==='get')return response(config,state.products);
+  if(path==='products'&&method==='post'){state.products.push(body);saveMockState(state);return response(config,body,201);}
+  if(parts[0]==='products'&&parts[1]&&method==='put'){const item=state.products.find(p=>p.sku===parts[1]);if(!item)fail(config,'Product not found',404);Object.assign(item,body);saveMockState(state);return response(config,item);}
+  if(path==='inventory'&&method==='get'){const query=config.params||{};return response(config,state.inventory.filter(i=>(!query.warehouseId||i.warehouseId===query.warehouseId)&&(!query.sku||i.sku===query.sku)).map(i=>({...i,available:i.onHand-i.reserved})));}
+  if(parts[0]==='inventory'&&parts[1]&&parts[2]&&parts[3]==='history'&&method==='get'){const [warehouseId,sku]=[parts[1],parts[2]];let events=state.events.filter(e=>e.warehouseId===warehouseId&&e.sku===sku).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));if(config.params?.asOf){const asOf=new Date(config.params.asOf);let onHand=0,reserved=0,count=0;state.events.filter(e=>e.warehouseId===warehouseId&&e.sku===sku&&new Date(e.timestamp)<=asOf).sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).forEach(e=>{if(['STOCK_RECEIVED','TRANSFER_IN','STOCK_ADJUSTED'].includes(e.type))onHand+=e.quantity;if(e.type==='TRANSFER_OUT'||e.type==='STOCK_SHIPPED')onHand-=e.quantity;if(e.type==='STOCK_RESERVED')reserved+=e.quantity;if(e.type==='RESERVATION_RELEASED'||e.type==='STOCK_SHIPPED')reserved-=e.quantity;count+=1});return response(config,{onHand,reserved,available:onHand-reserved,eventCount:count});}if(config.params?.type)events=events.filter(e=>e.type===config.params.type);return response(config,events);}
+  if(path==='inventory/adjust'&&method==='post'){try{const item=appendEvent(state,{...body,type:'STOCK_ADJUSTED',referenceId:`ADJ-${Date.now()}`});saveMockState(state);return response(config,item);}catch(error){fail(config,error.message);}}
+  if(path==='orders'&&method==='get')return response(config,state.orders.filter(o=>!config.params?.status||o.status===config.params.status));
+  if(path==='orders'&&method==='post'){const order={...body,id:nextId(state,'ORD'),status:'PENDING',createdAt:new Date().toISOString(),statusHistory:[{status:'PENDING',at:new Date().toISOString()}]};const warehouseId=body.warehouseId||state.warehouses[0].id;order.warehouseId=warehouseId;order.total=body.items.reduce((sum,item)=>sum+(Number(item.unitPrice)||0)*item.quantity,0);try{body.items.forEach(item=>{const stock=getInventory(state,warehouseId,item.sku);if(!stock||stock.onHand-stock.reserved<item.quantity)throw new Error(`Only ${stock?stock.onHand-stock.reserved:0} units available`);});body.items.forEach(item=>appendEvent(state,{warehouseId,sku:item.sku,type:'STOCK_RESERVED',quantity:item.quantity,referenceId:order.id}));order.status='CONFIRMED';order.statusHistory.push({status:'CONFIRMED',at:new Date().toISOString()});}catch(error){order.status='REJECTED';order.rejectionReason=error.message;order.statusHistory.push({status:'REJECTED',at:new Date().toISOString()});}state.orders.unshift(order);saveMockState(state);return response(config,order,201);}
+  if(parts[0]==='orders'&&parts[1]&&method==='get')return response(config,state.orders.find(o=>o.id===parts[1])||{});
+  if(parts[0]==='orders'&&parts[1]&&parts[2]==='ship'&&method==='put'){const order=state.orders.find(o=>o.id===parts[1]);if(!order)fail(config,'Order not found',404);if(order.status!=='CONFIRMED')fail(config,'Only confirmed orders can ship');order.items.forEach(item=>appendEvent(state,{warehouseId:order.warehouseId,sku:item.sku,type:'STOCK_SHIPPED',quantity:item.quantity,referenceId:order.id}));order.status='SHIPPED';order.statusHistory.push({status:'SHIPPED',at:new Date().toISOString()});saveMockState(state);return response(config,order);}
+  if(parts[0]==='orders'&&parts[1]&&parts[2]==='cancel'&&method==='put'){const order=state.orders.find(o=>o.id===parts[1]);if(!order)fail(config,'Order not found',404);if(order.status==='CONFIRMED')order.items.forEach(item=>appendEvent(state,{warehouseId:order.warehouseId,sku:item.sku,type:'RESERVATION_RELEASED',quantity:item.quantity,referenceId:order.id}));order.status='CANCELLED';order.statusHistory.push({status:'CANCELLED',at:new Date().toISOString()});saveMockState(state);return response(config,order);}
+  if(path==='transfers'&&method==='get')return response(config,state.transfers);
+  if(path==='transfers'&&method==='post'){const transfer={...body,id:nextId(state,'TRF'),status:'REQUESTED',createdAt:new Date().toISOString()};state.transfers.unshift(transfer);saveMockState(state);return response(config,transfer,201);}
+  if(parts[0]==='transfers'&&parts[1]&&['approve','reject','dispatch'].includes(parts[2])&&method==='put'){const transfer=state.transfers.find(t=>t.id===parts[1]);if(!transfer)fail(config,'Transfer not found',404);if(parts[2]==='approve')transfer.status='APPROVED';if(parts[2]==='reject')transfer.status='REJECTED';if(parts[2]==='dispatch'){const stock=getInventory(state,transfer.fromWarehouseId,transfer.sku);if(!stock||stock.onHand-stock.reserved<transfer.quantity)fail(config,'Not enough available stock');appendEvent(state,{warehouseId:transfer.fromWarehouseId,sku:transfer.sku,type:'TRANSFER_OUT',quantity:transfer.quantity,referenceId:transfer.id});transfer.status='IN_TRANSIT';}saveMockState(state);return response(config,transfer);}
+  if(parts[0]==='transfers'&&parts[1]&&parts[2]==='receive'&&method==='put'){const transfer=state.transfers.find(t=>t.id===parts[1]);if(!transfer)fail(config,'Transfer not found',404);const receivedQuantity=Number(body.receivedQuantity);appendEvent(state,{warehouseId:transfer.toWarehouseId,sku:transfer.sku,type:'TRANSFER_IN',quantity:transfer.quantity,referenceId:transfer.id});if(receivedQuantity!==transfer.quantity)appendEvent(state,{warehouseId:transfer.toWarehouseId,sku:transfer.sku,type:'STOCK_ADJUSTED',quantity:receivedQuantity-transfer.quantity,referenceId:transfer.id,note:'Transfer variance'});transfer.receivedQuantity=receivedQuantity;transfer.status='RECEIVED';saveMockState(state);return response(config,transfer);}
+  if(path==='suppliers'&&method==='get')return response(config,state.suppliers);
+  if(path==='suppliers'&&method==='post'){const supplier={...body,id:`sup-${Date.now()}`,products:[]};state.suppliers.unshift(supplier);saveMockState(state);return response(config,supplier,201);}
+  if(parts[0]==='suppliers'&&parts[1]&&method==='put'){const supplier=state.suppliers.find(s=>s.id===parts[1]);if(!supplier)fail(config,'Supplier not found',404);Object.assign(supplier,body);saveMockState(state);return response(config,supplier);}
+  if(path==='purchase-orders'&&method==='get')return response(config,state.purchaseOrders);
+  if(path==='purchase-orders'&&method==='post'){const purchaseOrder={...body,id:nextId(state,'PO'),status:'DRAFT',createdAt:new Date().toISOString()};state.purchaseOrders.unshift(purchaseOrder);saveMockState(state);return response(config,purchaseOrder,201);}
+  if(parts[0]==='purchase-orders'&&parts[1]&&parts[2]==='send'&&method==='put'){const po=state.purchaseOrders.find(p=>p.id===parts[1]);if(!po)fail(config,'Purchase order not found',404);po.status='SENT';saveMockState(state);return response(config,po);}
+  if(parts[0]==='purchase-orders'&&parts[1]&&parts[2]==='cancel'&&method==='put'){const po=state.purchaseOrders.find(p=>p.id===parts[1]);if(!po)fail(config,'Purchase order not found',404);po.status='CANCELLED';saveMockState(state);return response(config,po);}
+  if(parts[0]==='purchase-orders'&&parts[1]&&parts[2]==='receive'&&method==='post'){const po=state.purchaseOrders.find(p=>p.id===parts[1]);if(!po)fail(config,'Purchase order not found',404);body.lines.forEach(line=>{const existing=po.lines.find(item=>item.sku===line.sku);if(existing){existing.receivedQuantity+=Number(line.receivedQuantity);appendEvent(state,{warehouseId:po.warehouseId,sku:line.sku,type:'STOCK_RECEIVED',quantity:Number(line.receivedQuantity),referenceId:po.id});}});po.status=po.lines.every(line=>line.receivedQuantity>=line.quantity)?'RECEIVED':'PARTIALLY_RECEIVED';saveMockState(state);return response(config,po);}
+  if(path==='notifications'&&method==='get')return response(config,state.notifications);
+  if(path==='notifications/read-all'&&method==='put'){state.notifications.forEach(n=>n.read=true);saveMockState(state);return response(config,state.notifications);}
+  if(parts[0]==='notifications'&&parts[1]&&parts[2]==='read'&&method==='put'){const notification=state.notifications.find(n=>n.id===parts[1]);if(notification)notification.read=true;saveMockState(state);return response(config,notification);}
+  if(path==='inventory/reconciliation'&&method==='get')return response(config,state.inventory.map((item,index)=>({...item,replayedOnHand:item.onHand+(index===4?3:0),status:index===4?'MISMATCH':'OK'})));
+  if(path==='inventory/reconciliation/rebuild'&&method==='post'){const item=getInventory(state,body.warehouseId,body.sku);if(item){item.version+=1;saveMockState(state);}return response(config,item);}
+  return response(config,{});
 };
-
-export const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api' });
-api.defaults.adapter = import.meta.env.VITE_USE_MOCK !== 'false' ? mockAdapter : undefined;
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('invensense-token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+export const api=axios.create({baseURL:import.meta.env.VITE_API_BASE_URL||'http://localhost:8080/api'});
+api.defaults.adapter=import.meta.env.VITE_USE_MOCK!=='false'?mockAdapter:undefined;
+api.interceptors.request.use(config=>{const token=localStorage.getItem('invensense-token');if(token)config.headers.Authorization=`Bearer ${token}`;return config;});

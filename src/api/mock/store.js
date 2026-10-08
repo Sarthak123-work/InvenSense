@@ -1,21 +1,19 @@
 const STORAGE_KEY = 'invensense-demo-state';
-
-const seed = {
-  warehouses: [{ id: 'wh-mum', name: 'Mumbai', city: 'Mumbai', capacity: 10000 }, { id: 'wh-pun', name: 'Pune', city: 'Pune', capacity: 8000 }, { id: 'wh-del', name: 'Delhi', city: 'Delhi', capacity: 12000 }],
-  inventory: [{ warehouseId: 'wh-pun', sku: 'SKU-1001', onHand: 12, reserved: 0, reorderPoint: 40, version: 37 }, { warehouseId: 'wh-mum', sku: 'SKU-1012', onHand: 0, reserved: 0, reorderPoint: 20, version: 22 }],
-  orders: [],
-  notifications: [{ id: 'n-1', type: 'LOW_STOCK', message: 'SKU-1001 is low in Pune (12 left)', read: false }]
-};
-
-export function getMockState() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  return saved ? JSON.parse(saved) : structuredClone(seed);
+const productSeed = [
+  ['SKU-1001','Wireless Mouse','Electronics',799,40],['SKU-1002','Mechanical Keyboard','Electronics',2899,24],['SKU-1003','USB-C Hub 7-in-1','Electronics',1999,18],['SKU-1004','Organic Green Tea','Grocery',349,30],['SKU-1005','Arabica Coffee Beans','Grocery',899,24],['SKU-1006','Cotton Crew T-Shirt','Apparel',699,36],['SKU-1007','Running Shoes','Apparel',3299,22],['SKU-1008','Linen Cushion Cover','Home',549,25],['SKU-1009','Bamboo Storage Box','Home',1199,18],['SKU-1010','LED Desk Lamp','Home',1599,20],['SKU-1011','Bluetooth Speaker','Electronics',2499,28],['SKU-1012','Smart Water Bottle','Home',1299,20]
+];
+const warehouseSeed = [{ id:'wh-mum',name:'Mumbai',city:'Mumbai',capacity:10000 },{ id:'wh-pun',name:'Pune',city:'Pune',capacity:8000 },{ id:'wh-del',name:'Delhi',city:'Delhi',capacity:12000 }];
+function createSeed(){
+  const products = productSeed.map(([sku,name,category,unitPrice,reorderPoint]) => ({ sku,name,category,unitPrice,reorderPoint,unit:'pcs' }));
+  const inventory = warehouseSeed.flatMap((warehouse, warehouseIndex) => products.map((product, productIndex) => ({ warehouseId:warehouse.id, sku:product.sku, onHand:product.sku==='SKU-1012'&&warehouse.id==='wh-mum'?0:product.sku==='SKU-1011'&&warehouse.id==='wh-del'?12:product.sku==='SKU-1005'&&warehouse.id==='wh-pun'?18:55+((productIndex*17+warehouseIndex*23)%125), reserved:productIndex%4===0?4:0, reorderPoint:product.reorderPoint, version:1 })));
+  const suppliers = [{id:'sup-1',name:'TechSource Pvt Ltd',contactPerson:'Anil Deshmukh',email:'anil@techsource.example',phone:'+91 22 4000 1100',leadTimeDays:7,rating:4.8,products:['SKU-1001','SKU-1002','SKU-1003','SKU-1011']},{id:'sup-2',name:'GreenMart Organics',contactPerson:'Meera Joshi',email:'meera@greenmart.example',phone:'+91 20 4100 2200',leadTimeDays:5,rating:4.6,products:['SKU-1004','SKU-1005']},{id:'sup-3',name:'Horizon Fabrics',contactPerson:'Rohan Kapoor',email:'rohan@horizon.example',phone:'+91 11 4200 3300',leadTimeDays:14,rating:4.3,products:['SKU-1006','SKU-1007']},{id:'sup-4',name:'HomeStyle Imports',contactPerson:'Tara Menon',email:'tara@homestyle.example',phone:'+91 80 4300 4400',leadTimeDays:10,rating:4.5,products:['SKU-1008','SKU-1009','SKU-1010','SKU-1012']}];
+  const events = inventory.filter(item=>item.onHand<item.reorderPoint).map(item=>({eventId:`evt-${item.sku}-${item.warehouseId}`,warehouseId:item.warehouseId,sku:item.sku,type:'STOCK_RECEIVED',quantity:item.onHand,resultingOnHand:item.onHand,resultingReserved:item.reserved,version:1,referenceId:'SEED-2026',actor:'system',timestamp:new Date(Date.now()-86400000*4).toISOString()}));
+  return { warehouses:warehouseSeed, products, inventory, events, orders:[{id:'ORD-2026-0148',customerName:'Riya Sharma',email:'riya@example.com',address:'12 Park Street, Pune',warehouseId:'wh-pun',status:'CONFIRMED',items:[{sku:'SKU-1001',quantity:3,unitPrice:799}],total:2397,createdAt:new Date().toISOString(),statusHistory:[{status:'PENDING',at:new Date().toISOString()},{status:'CONFIRMED',at:new Date().toISOString()}]}], transfers:[], suppliers, purchaseOrders:[], notifications:[{id:'n-1',type:'LOW_STOCK',message:'SKU-1001 is low in Pune',read:false,createdAt:new Date().toISOString()},{id:'n-2',type:'RECONCILIATION_MISMATCH',message:'Arabica Coffee Beans needs rebuilding',read:false,createdAt:new Date().toISOString()}] };
 }
-
-export function saveMockState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-export function resetMockState() {
-  localStorage.removeItem(STORAGE_KEY);
-}
+export function getMockState(){ const fresh=createSeed(); const saved=localStorage.getItem(STORAGE_KEY); if(saved){ const parsed=JSON.parse(saved); const state={...fresh,...parsed}; state.products=parsed.products||fresh.products; state.events=parsed.events||fresh.events; state.transfers=parsed.transfers||fresh.transfers; state.suppliers=parsed.suppliers||fresh.suppliers; state.purchaseOrders=parsed.purchaseOrders||fresh.purchaseOrders; state.notifications=parsed.notifications||fresh.notifications; state.inventory=parsed.inventory||fresh.inventory; state.orders=parsed.orders||fresh.orders; return state; } saveMockState(fresh); return fresh; }
+export function saveMockState(state){ localStorage.setItem(STORAGE_KEY,JSON.stringify(state)); }
+export function resetMockState(){ localStorage.removeItem(STORAGE_KEY); }
+export function parseBody(config){ return typeof config.data==='string'?JSON.parse(config.data||'{}'):(config.data||{}); }
+export function getInventory(state,warehouseId,sku){ return state.inventory.find(item => (!warehouseId||item.warehouseId===warehouseId)&&(!sku||item.sku===sku)); }
+export function appendEvent(state,{warehouseId,sku,type,quantity,referenceId,actor='demo.user',note}){ const item=getInventory(state,warehouseId,sku); if(!item) throw new Error('Inventory item not found'); if(type==='STOCK_RECEIVED'||type==='TRANSFER_IN'||type==='STOCK_ADJUSTED') item.onHand+=quantity; if(type==='STOCK_RESERVED') item.reserved+=quantity; if(type==='RESERVATION_RELEASED') item.reserved-=quantity; if(type==='STOCK_SHIPPED'){item.onHand-=quantity;item.reserved-=quantity;} if(type==='TRANSFER_OUT') item.onHand-=quantity; if(item.onHand<0||item.reserved<0||item.reserved>item.onHand) throw new Error('Stock change would create an invalid balance'); item.version+=1; state.events.unshift({eventId:`evt-${Date.now()}-${Math.random().toString(16).slice(2)}`,warehouseId,sku,type,quantity,resultingOnHand:item.onHand,resultingReserved:item.reserved,version:item.version,referenceId,actor,note,timestamp:new Date().toISOString()}); if(item.onHand-item.reserved<item.reorderPoint&&!state.notifications.some(n=>n.type==='LOW_STOCK'&&n.message.includes(sku)&&!n.read)) state.notifications.unshift({id:`n-${Date.now()}`,type:'LOW_STOCK',message:`${sku} is low in ${state.warehouses.find(w=>w.id===warehouseId)?.name}`,read:false,createdAt:new Date().toISOString()}); return item; }
+export function nextId(state,prefix){ return `${prefix}-${String(state[prefix==='ORD'?'orders':prefix==='TRF'?'transfers':'purchaseOrders'].length+1).padStart(4,'0')}`; }
