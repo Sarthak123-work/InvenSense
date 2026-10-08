@@ -1,0 +1,49 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/auth/**
+        - id: warehouse-service
+          uri: lb://warehouse-service
+          predicates:
+            - Path=/api/warehouses/**,/api/products/**,/api/transfers/**
+        - id: inventory-service
+          uri: lb://inventory-service
+          predicates:
+            - Path=/api/inventory/**
+        - id: order-service
+          uri: lb://order-service
+          predicates:
+            - Path=/api/orders/**
+        - id: supplier-service
+          uri: lb://supplier-service
+          predicates:
+            - Path=/api/suppliers/**,/api/purchase-orders/**
+        - id: notification-service
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/notifications/**
+        - id: forecast-service
+          uri: http://forecast-service:8087
+          predicates:
+            - Path=/api/forecast/**
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowed-origins: "http://localhost:5173"
+            allowed-methods: "*"
+            allowed-headers: "*"
+            allow-credentials: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka
